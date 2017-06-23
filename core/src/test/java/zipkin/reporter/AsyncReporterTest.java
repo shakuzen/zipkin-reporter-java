@@ -41,6 +41,7 @@ public class AsyncReporterTest {
   @After
   public void close() {
     if (reporter != null) reporter.close();
+    metrics.clear();
   }
 
   @Test
