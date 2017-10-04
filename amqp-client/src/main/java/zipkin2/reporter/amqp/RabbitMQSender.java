@@ -22,6 +22,7 @@ import com.rabbitmq.client.ConnectionFactory;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
+import java.util.logging.Logger;
 import zipkin2.Call;
 import zipkin2.Callback;
 import zipkin2.CheckResult;
@@ -30,13 +31,12 @@ import zipkin2.reporter.BytesMessageEncoder;
 import zipkin2.reporter.Sender;
 import zipkin2.reporter.internal.BaseCall;
 
+import static java.util.logging.Level.WARNING;
+
 /**
  * This sends (usually json v2) encoded spans to a RabbitMQ queue.
  *
  * <p>This sender is thread-safe.
- *
- * <p>This sender is linked against RabbitMQ 0.10.2+, which allows it to work with RabbitMQ 0.10+
- * brokers
  */
 @AutoValue
 public abstract class RabbitMQSender extends Sender {
@@ -54,6 +54,7 @@ public abstract class RabbitMQSender extends Sender {
     String addresses;
     String queue = "zipkin";
     Encoding encoding = Encoding.JSON;
+    int messageMaxBytes = 100000;
 
     /** Comma-separated list of host:port pairs */
     public Builder addresses(String addresses) {
@@ -62,7 +63,7 @@ public abstract class RabbitMQSender extends Sender {
       return this;
     }
 
-    /** Queue zipkin spans will be send to. Defaults to "zipkin" */
+    /** Queue zipkin spans will be sent to. Defaults to "zipkin" */
     public Builder queue(String queue) {
       if (queue == null) throw new NullPointerException("queue == null");
       this.queue = queue;
@@ -75,10 +76,15 @@ public abstract class RabbitMQSender extends Sender {
       return this;
     }
 
+    public Builder messageMaxBytes(int messageMaxBytes) {
+      this.messageMaxBytes = messageMaxBytes;
+      return this;
+    }
+
     public final RabbitMQSender build() {
       return new AutoValue_RabbitMQSender(
           encoding,
-          100000, // TODO: length
+          messageMaxBytes,
           addresses,
           queue,
           BytesMessageEncoder.forEncoding(encoding)
@@ -87,7 +93,8 @@ public abstract class RabbitMQSender extends Sender {
   }
 
   public final Builder toBuilder() {
-    return new Builder().addresses(addresses()).queue(queue()).encoding(encoding());
+    return new Builder().addresses(addresses()).queue(queue()).encoding(encoding())
+        .messageMaxBytes(messageMaxBytes());
   }
 
   abstract String addresses();
@@ -104,9 +111,7 @@ public abstract class RabbitMQSender extends Sender {
   }
 
   /**
-   * This sends all of the spans as a single message.
-   *
-   * <p>NOTE: this blocks until the metadata server is available.
+   * The returned call will send all of the spans as a single message.
    */
   @Override public Call<Void> sendSpans(List<byte[]> encodedSpans) {
     if (closeCalled) throw new IllegalStateException("closed");
@@ -117,7 +122,7 @@ public abstract class RabbitMQSender extends Sender {
   /** Ensures there are no connection issues. */
   @Override public CheckResult check() {
     try {
-      get().getHeartbeat();
+      get().isOpen();
       return CheckResult.OK;
     } catch (RuntimeException e) {
       return CheckResult.failed(e);
@@ -142,6 +147,7 @@ public abstract class RabbitMQSender extends Sender {
   }
 
   class RabbitMQCall extends BaseCall<Void> { // RabbitMQFuture is not cancelable
+    private final Logger logger = Logger.getLogger(RabbitMQCall.class.getName());
     private final byte[] message;
 
     RabbitMQCall(byte[] message) {
@@ -161,7 +167,10 @@ public abstract class RabbitMQSender extends Sender {
         try {
           channel.close();
         } catch (TimeoutException e) {
-          // TODO: log
+          if (logger.isLoggable(WARNING)) {
+            logger.log(WARNING, "Timed out closing RabbitMQ publisher channel. "
+                + "Channel may still be open", e);
+          }
         }
       }
     }
