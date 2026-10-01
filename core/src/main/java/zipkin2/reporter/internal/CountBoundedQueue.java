@@ -5,6 +5,8 @@
 package zipkin2.reporter.internal;
 
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -18,6 +20,8 @@ import zipkin2.reporter.ReporterMetrics;
  * <p>This is similar to {@link java.util.concurrent.ArrayBlockingQueue} in implementation.
  */
 final class CountBoundedQueue<S> extends BoundedQueue<S> {
+
+  final static CountDownLatch latch = new CountDownLatch(1);
 
   final ReentrantLock lock = new ReentrantLock(false);
   final Condition available = lock.newCondition();
@@ -80,6 +84,7 @@ final class CountBoundedQueue<S> extends BoundedQueue<S> {
           if (nanosLeft <= 0) return 0;
           nanosLeft = available.awaitNanos(nanosLeft);
         }
+        if (!latch.await(5, TimeUnit.SECONDS)) return 0;
         return doDrain(consumer);
       } finally {
         lock.unlock();
